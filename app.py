@@ -1846,7 +1846,7 @@ async def _ensure_job_files(job_id: str, request: Request) -> bool:
 
 
 from editor import VideoEditor
-from subtitles import generate_srt, generate_ass, burn_subtitles, generate_srt_from_video
+from subtitles import generate_srt, generate_ass, generate_classic_ass, burn_subtitles, generate_srt_from_video
 from hooks import add_hook_to_video
 from translate import translate_video, get_supported_languages
 from thumbnail import analyze_video_for_titles, refine_titles, generate_thumbnail, generate_youtube_description
@@ -2045,6 +2045,10 @@ class SubtitleRequest(BaseModel):
     base_opacity: float = 1.0  # opacity of non-active words (dimmed modern look)
     uppercase: bool = False
     input_filename: Optional[str] = None
+    # Edited captions from the subtitle editor, as [{text, startMs, endMs}] with
+    # times relative to clip start. When present, these override the transcript
+    # from metadata.json so text edits made in the editor are burned in.
+    captions: Optional[List[dict]] = None
 
 
 @app.get("/api/clip/{job_id}/{clip_index}/transcript")
@@ -2284,6 +2288,30 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
         raise HTTPException(status_code=404, detail="Clip not found")
         
     clip_data = clips[req.clip_index]
+
+    # Prefer edited captions from the subtitle editor over the original
+    # transcript. The editor sends [{text, startMs, endMs}] with times relative
+    # to clip start; _collect_word_blocks subtracts clip_start again, so we
+    # rebase the times to absolute (clip_start + ms/1000) to cancel that out.
+    if req.captions:
+        clip_start = clip_data.get('start', 0)
+        edited_words = []
+        for c in req.captions:
+            text = str(c.get('text', '')).strip()
+            if not text:
+                continue
+            # Prefix a space so merge_continuation_words() treats each caption as
+            # a distinct word (that helper glues space-less tokens onto the
+            # previous word as continuation fragments — without this the whole
+            # caption collapses into one static block).
+            edited_words.append({
+                'word': f' {text}',
+                'start': clip_start + (c.get('startMs', 0) / 1000.0),
+                'end': clip_start + (c.get('endMs', 0) / 1000.0),
+            })
+        if edited_words:
+            transcript = {'segments': [{'words': edited_words}],
+                          'language': transcript.get('language', 'en')}
     
     # Video Path
     if req.input_filename:
@@ -2308,7 +2336,10 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
     # Define outputs
     generation_id = int(time.time())
     is_karaoke = req.style == "karaoke"
-    srt_filename = f"subs_{req.clip_index}_{generation_id}.{'ass' if is_karaoke else 'srt'}"
+    is_dubbed = filename.startswith("translated_")
+    # Dubbed classic still transcribes fresh audio → SRT. Everything else uses
+    # ASS with an explicit PlayResY=1920 so libass doesn't apply its 288px default.
+    srt_filename = f"subs_{req.clip_index}_{generation_id}.{'srt' if (not is_karaoke and is_dubbed) else 'ass'}"
     srt_path = os.path.join(output_dir, srt_filename)
 
     # Style options shared by the karaoke ASS generator paths.
@@ -2337,7 +2368,6 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
     #
     # The dubbed path is the exception and keeps the charge: it runs a fresh
     # Whisper transcription over the translated audio, which is real work.
-    is_dubbed = filename.startswith("translated_")
     subtitle_minutes = (_cloud_config.subtitle_minutes_for(filename)
                         if BILLING_ENABLED else 0)
     reservation_id = await reserve_managed_action(
@@ -2358,7 +2388,12 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
         elif is_karaoke:
             success = generate_ass(transcript, clip_data['start'], clip_data['end'], srt_path, **karaoke_opts)
         else:
-            success = generate_srt(transcript, clip_data['start'], clip_data['end'], srt_path)
+            success = generate_classic_ass(
+                transcript, clip_data['start'], clip_data['end'], srt_path,
+                alignment=req.position, fontsize=req.font_size, font_name=req.font_name,
+                font_color=req.font_color, border_color=req.border_color,
+                border_width=req.border_width, bg_color=req.bg_color, bg_opacity=req.bg_opacity,
+            )
 
         if not success:
              raise HTTPException(status_code=400, detail="No words found for this clip range.")

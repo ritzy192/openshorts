@@ -364,7 +364,11 @@ export default function ResultCard({ clip, index, jobId, durableUrl, uploadPostK
                     effect: options.effect || 'none',
                     base_opacity: options.baseOpacity ?? 1.0,
                     uppercase: options.uppercase || false,
-                    input_filename: serverVideoFile
+                    input_filename: serverVideoFile,
+                    // Edited caption text from the subtitle editor. Without this,
+                    // the server rebuilds captions from the original transcript
+                    // and ignores the user's edits.
+                    captions: options.remotion?.captions || null
                 })
             });
 

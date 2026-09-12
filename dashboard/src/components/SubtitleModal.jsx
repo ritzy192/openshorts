@@ -12,6 +12,9 @@ const FONT_OPTIONS = [
     { value: 'Helvetica', label: 'Helvetica' },
     { value: 'Georgia', label: 'Georgia' },
     { value: 'Courier New', label: 'Courier New' },
+    { value: 'Noto Serif', label: 'Noto Serif' },
+    { value: 'Noto Sans Devanagari', label: 'Noto Sans Devanagari' },
+    { value: 'Anton', label: 'Anton' },
 ];
 
 const COLOR_PRESETS = [
@@ -67,7 +70,7 @@ const swatchClass = (selected) =>
 
 export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll, onRemove, isProcessing, videoUrl, jobId, clipIndex, existingHook, bulkCount = 0, bulkProgress }) {
     const [position, setPosition] = useState('bottom');
-    const [fontSize] = useState(24);
+    const [fontSize, setFontSize] = useState(24);
     const [fontName, setFontName] = useState('Verdana');
     const [fontColor, setFontColor] = useState('#FFFFFF');
     const [highlightColor, setHighlightColor] = useState('#FFDD00');
@@ -79,8 +82,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const [showTextEditor, setShowTextEditor] = useState(false);
 
     // Karaoke (server-side ASS burn) state
-    const [style, setStyle] = useState('classic'); // classic | karaoke
-    const [effect, setEffect] = useState('none'); // none | glow | pop | box
+    const [style, setStyle] = useState('karaoke'); // classic | karaoke
+    const [effect, setEffect] = useState('pop'); // none | glow | pop | box
     const [baseOpacity, setBaseOpacity] = useState(1.0);
     const [uppercase, setUppercase] = useState(false);
     const [activePreset, setActivePreset] = useState(null);
@@ -160,7 +163,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         position,
         style: {
             fontFamily: fontName,
-            fontSize: fontSize * 2.2, // Scale up for 1080p (modal fontSize is for small preview)
+            fontSize: fontSize * 2.2,
             fontColor,
             highlightColor,
             borderColor,
@@ -302,7 +305,14 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             <SegmentedControl
                                 options={ANIMATION_OPTIONS}
                                 value={animation}
-                                onChange={setAnimation}
+                                onChange={(val) => {
+                                    setAnimation(val);
+                                    setActivePreset(null);
+                                    if (val === 'pop') { setStyle('karaoke'); setEffect('pop'); }
+                                    else if (val === 'word-highlight') { setStyle('karaoke'); setEffect('glow'); }
+                                    else if (val === 'karaoke') { setStyle('karaoke'); setEffect('none'); }
+                                    else { setStyle('classic'); setEffect('none'); }
+                                }}
                                 columns={2}
                                 size="sm"
                             />
@@ -343,6 +353,26 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     <option key={f.value} value={f.value} style={{ fontFamily: f.value }}>{f.label}</option>
                                 ))}
                             </select>
+                        </div>
+
+                        {/* Font Size */}
+                        <div>
+                            <div className="flex justify-between mb-1">
+                                <p className="eyebrow">Font size</p>
+                                <span className="readout">{Math.round(fontSize * 2.2)}px</span>
+                            </div>
+                            <input
+                                type="range"
+                                min="12"
+                                max="48"
+                                value={fontSize}
+                                onChange={(e) => setFontSize(parseInt(e.target.value))}
+                                className="w-full accent-[var(--color-accent)]"
+                            />
+                            <div className="flex justify-between">
+                                <span className="readout">Small</span>
+                                <span className="readout">Large</span>
+                            </div>
                         </div>
 
                         {/* Text Color */}
@@ -445,7 +475,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                     <div className="mt-5 shrink-0 space-y-2">
                         {(() => {
                             const styleOptions = {
-                                position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
+                                position, fontSize: Math.round(fontSize * 2.2), fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
                                 // Karaoke burn (server-side ASS render)
                                 style, effect, baseOpacity, uppercase, highlightColor,
                                 // Remotion data

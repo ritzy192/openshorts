@@ -98,6 +98,13 @@ class TestStyleSanitizing:
         assert _sanitize_font_name(",,{}") == "Verdana"
         assert _sanitize_font_name(None) == "Verdana"
 
+    def test_fontconfig_prefers_script_aware_aliases(self):
+        from pathlib import Path
+        config = Path("fonts/openshorts-fontmap.conf").read_text(encoding="utf-8")
+        assert "Noto Sans Devanagari" in config
+        assert "Noto Serif" in config
+        assert "Anton" in config
+
     def test_clamp_number(self):
         assert _clamp_number(5, 0, 10, 1) == 5
         assert _clamp_number(99, 0, 10, 1) == 10
@@ -210,6 +217,31 @@ class TestGenerateAss:
         assert "&H00FFFFFF" in content  # pure white, no dimming
 
 
+class TestGenerateClassicAss:
+    def _t(self, words):
+        return {"segments": [{"words": words}]}
+
+    def test_one_event_per_block(self, tmp_path):
+        from subtitles import generate_classic_ass
+        out = tmp_path / "subs.ass"
+        words = [_w(" one", 0.0, 0.3), _w(" two", 0.3, 0.6), _w(" three", 0.6, 0.9)]
+        assert generate_classic_ass(self._t(words), 0, 10, str(out)) is True
+        content = out.read_text(encoding="utf-8-sig")
+        assert content.count("Dialogue:") == 1
+        assert "one two three" in content
+
+    def test_playres_is_1920(self, tmp_path):
+        from subtitles import generate_classic_ass
+        out = tmp_path / "subs.ass"
+        assert generate_classic_ass(self._t([_w(" hi", 0.0, 0.5)]), 0, 10, str(out)) is True
+        assert "PlayResY: 1920" in out.read_text(encoding="utf-8-sig")
+
+    def test_empty_range_returns_false(self, tmp_path):
+        from subtitles import generate_classic_ass
+        out = tmp_path / "subs.ass"
+        assert generate_classic_ass(self._t([_w(" late", 50.0, 50.5)]), 0, 10, str(out)) is False
+
+
 class TestBurnFilterFonts:
     """The ffmpeg filter must point libass at the bundled fonts dir — without
     it every UI font choice silently falls back to DejaVu (issue #57)."""
@@ -269,14 +301,14 @@ class TestAutoCaptionDefaults:
 
     def test_captions_clear_the_platform_ui(self, tmp_path):
         from subtitles import SAFE_MARGIN_V, generate_ass
-        # PlayResY is 288, so the margin must be a meaningful share of it —
-        # the old hardcoded 25 (8.7%) sat under TikTok's own bottom chrome.
-        assert SAFE_MARGIN_V / 288 >= 0.12
+        # Canvas is 1920px; margin must be ≥8% to clear TikTok/Reels chrome.
+        assert SAFE_MARGIN_V / 1920 >= 0.08
         out = tmp_path / "subs.ass"
         words = [_w(" hola", 0.0, 0.5)]
         assert generate_ass(self._t(words), 0, 10, str(out)) is True
-        style_line = [l for l in out.read_text(encoding="utf-8-sig").splitlines()
-                      if l.startswith("Style: Default")][0]
+        content = out.read_text(encoding="utf-8-sig")
+        assert "PlayResY: 1920" in content
+        style_line = [l for l in content.splitlines() if l.startswith("Style: Default")][0]
         assert f",10,10,{SAFE_MARGIN_V},1" in style_line
 
     def test_margin_is_overridable(self, tmp_path):

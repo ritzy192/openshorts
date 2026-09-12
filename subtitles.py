@@ -216,12 +216,11 @@ def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, ma
     return True
 
 
-# Vertical margin for burned captions, in PlayResY=288 units (so ~15% of the
-# frame height). The old hardcoded 25 (8.7%) put captions underneath TikTok's
-# and Reels' own bottom UI — the caption/username block and the music ticker —
-# where they were partly covered on the platform even though the exported file
-# looked fine.
-SAFE_MARGIN_V = 43
+# Vertical margin for burned captions in ASS virtual canvas units (PlayResY=1920).
+# 192 = 10% of 1920, matching the Remotion preview's "bottom: 10%" position and
+# clearing TikTok/Reels bottom chrome.
+SAFE_MARGIN_V = 192
+ASS_PLAYRES_Y = 1920
 
 
 # The caption look applied automatically to every generated clip. Chosen by
@@ -317,8 +316,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     if not blocks:
         return False
 
-    # Match the SRT burn path: PlayResY 288 keeps font sizes consistent.
-    final_fontsize = int(_clamp_number(fontsize, 10, 200, 16) * 0.85)
+    final_fontsize = int(_clamp_number(fontsize, 10, 200, 16))
     if final_fontsize < 10:
         final_fontsize = 10
 
@@ -366,7 +364,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
-        "PlayResY: 288\n"
+        f"PlayResY: {ASS_PLAYRES_Y}\n"
         "WrapStyle: 0\n"
         "ScaledBorderAndShadow: yes\n"
         "\n"
@@ -377,7 +375,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{safe_font},{final_fontsize},{primary_colour},{primary_colour},"
         f"{outline_colour},{back_colour},1,0,0,0,100,100,0,0,{border_style},"
-        f"{outline_width},0,{ass_alignment},10,10,{int(_clamp_number(margin_v, 0, 200, SAFE_MARGIN_V))},1\n"
+        f"{outline_width},0,{ass_alignment},10,10,{int(_clamp_number(margin_v, 0, ASS_PLAYRES_Y // 2, SAFE_MARGIN_V))},1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
@@ -414,6 +412,84 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         f.write(header + "\n".join(events) + "\n")
 
     return True
+
+def generate_classic_ass(transcript, clip_start, clip_end, output_path,
+                          max_chars=20, max_duration=2.0, alignment='bottom',
+                          fontsize=16, font_name="Verdana", font_color="#FFFFFF",
+                          border_color="#000000", border_width=2,
+                          bg_color="#000000", bg_opacity=0.0,
+                          margin_v=SAFE_MARGIN_V):
+    """
+    Generates a classic (non-karaoke) ASS file with PlayResY=1920.
+    One Dialogue event per word block so all words appear at once in a single colour.
+    Used instead of SRT+force_style to keep the PlayResY explicit and correct.
+    """
+    blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration)
+    if not blocks:
+        return False
+
+    final_fontsize = int(_clamp_number(fontsize, 10, 200, 16))
+    if final_fontsize < 10:
+        final_fontsize = 10
+
+    align_map = {'top': 8, 'middle': 5, 'bottom': 2}
+    ass_alignment = align_map.get(str(alignment).lower(), 2)
+    safe_font = _sanitize_font_name(font_name)
+
+    primary_colour = hex_to_ass_color(font_color, 1.0)
+    bg_opacity = _clamp_number(bg_opacity, 0.0, 1.0, 0.0)
+    border_width = _clamp_number(border_width, 0, 10, 2)
+
+    if bg_opacity > 0:
+        border_style = 3
+        outline_colour = hex_to_ass_color(bg_color, bg_opacity, fallback="000000")
+        outline_width = 1
+    else:
+        border_style = 1
+        outline_colour = hex_to_ass_color(border_color, 1.0, fallback="000000")
+        outline_width = max(1, int(border_width))
+
+    back_colour = hex_to_ass_color("#000000", 0.0)
+
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResY: {ASS_PLAYRES_Y}\n"
+        "WrapStyle: 0\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Default,{safe_font},{final_fontsize},{primary_colour},{primary_colour},"
+        f"{outline_colour},{back_colour},1,0,0,0,100,100,0,0,{border_style},"
+        f"{outline_width},0,{ass_alignment},10,10,{int(_clamp_number(margin_v, 0, ASS_PLAYRES_Y // 2, SAFE_MARGIN_V))},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+
+    events = []
+    for block in blocks:
+        text = " ".join(_escape_ass_text(w['word']) for w in block)
+        start = block[0]['start']
+        end = block[-1]['end']
+        if end <= start:
+            continue
+        events.append(
+            f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,0,0,0,,{text}"
+        )
+
+    if not events:
+        return False
+
+    with open(output_path, 'w', encoding='utf-8-sig') as f:
+        f.write(header + "\n".join(events) + "\n")
+
+    return True
+
 
 def format_srt_block(index, start, end, text):
     def format_time(seconds):
@@ -482,11 +558,9 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     elif align_lower == 'bottom':
         ass_alignment = 2
 
-    # Font size scaling for ASS virtual resolution (PlayResY=288 default)
-    # For vertical 1080x1920 video, we need larger text for readability
-    final_fontsize = int(_clamp_number(fontsize, 10, 200, 16) * 0.85)
-    if final_fontsize < 10:
-        final_fontsize = 10
+    # SRT+force_style: libass defaults to PlayResY=288, so divide to cancel
+    # the 6.67× scale-up and render at the fontsize requested.
+    final_fontsize = max(1, round(_clamp_number(fontsize, 10, 200, 16) * 288 / ASS_PLAYRES_Y))
 
     safe_font_name = _sanitize_font_name(font_name)
     bg_opacity = _clamp_number(bg_opacity, 0.0, 1.0, 0.0)
